@@ -191,15 +191,6 @@ const HashSignDApp: React.FC = () => {
     }
   };
 
-  if (!account) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <WalletSelector />
-        <h2 className="text-2xl font-bold mb-4">Please connect your wallet to use HashSign</h2>
-      </div>
-    );
-  }
-
   if (!isRegistered) {
     return (
       <div className="flex items-center justify-center h-screen">

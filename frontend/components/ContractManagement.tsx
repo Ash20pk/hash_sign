@@ -3,9 +3,12 @@ import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { aptosClient } from "@/utils/aptosClient";
 import { InputTransactionData } from "@aptos-labs/wallet-adapter-react";
 import axios from 'axios';
-import { Modal, Button, Upload, message, Input } from 'antd';
-import { UploadOutlined, PlusOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Modal, Button, Upload, message, Input, Tabs } from 'antd';
+import { UploadOutlined, PlusOutlined, FileTextOutlined, ShareAltOutlined } from '@ant-design/icons';
 import { WalletSelector } from "./WalletSelector";
+import { useNavigate, useParams } from 'react-router-dom';
+
+const { TabPane } = Tabs;
 
 interface Signature {
   signer: string;
@@ -26,70 +29,80 @@ interface DocumentStore {
   document_counter: number;
 }
 
-const HashSignDApp: React.FC = () => {
-  const { account, signAndSubmitTransaction } = useWallet();
-  const [isRegistered, setIsRegistered] = useState(false);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [signers, setSigners] = useState("");
-  const [transactionInProgress, setTransactionInProgress] = useState(false);
-  const [viewDocumentUrl, setViewDocumentUrl] = useState<string | null>(null);
-  const moduleAddress = process.env.VITE_APP_MODULE_ADDRESS;
+export const ContractManagement: React.FC = () => {
+    const { account, signAndSubmitTransaction } = useWallet();
+    const [isRegistered, setIsRegistered] = useState(false);
+    const [documents, setDocuments] = useState<Document[]>([]);
+    const [pendingDocuments, setPendingDocuments] = useState<Document[]>([]);
+    const [isModalVisible, setIsModalVisible] = useState(false);
+    const [file, setFile] = useState<File | null>(null);
+    const [signers, setSigners] = useState("");
+    const [transactionInProgress, setTransactionInProgress] = useState(false);
+    const [viewDocumentUrl, setViewDocumentUrl] = useState<string | null>(null);
+    const moduleAddress = process.env.VITE_APP_MODULE_ADDRESS;
+    const moduleName = process.env.VITE_APP_MODULE_NAME
+    const navigate = useNavigate();
 
-  useEffect(() => {
+useEffect(() => {
     if (account) {
-      checkRegistration();
       fetchDocuments();
+      fetchPendingDocuments();
     }
   }, [account]);
-
-  const checkRegistration = async () => {
-    if (!account) return;
-    try {
-      await aptosClient().getAccountResource({
-        accountAddress: account.address,
-        resourceType: `${moduleAddress}::hash_sign1::DocumentStore`
-      });
-      setIsRegistered(true);
-    } catch (error) {
-      setIsRegistered(false);
-    }
-  };
-
-  const register = async () => {
-    if (!account) return;
-    setTransactionInProgress(true);
-    try {
-      const payload: InputTransactionData = {
-        data: {
-          function: `${moduleAddress}::hash_sign1::initialize`,
-          functionArguments: [],
-        }
-      };
-      await signAndSubmitTransaction(payload);
-      setIsRegistered(true);
-    } catch (error) {
-      console.error("Error registering:", error);
-    } finally {
-      setTransactionInProgress(false);
-    }
-  };
 
   const fetchDocuments = async () => {
     if (!account) return;
     try {
-      const resource = await aptosClient().getAccountResource({
-        accountAddress: account.address,
-        resourceType: `${moduleAddress}::hash_sign1::DocumentStore`
-      });
-      const documentStore = resource as DocumentStore;
-      const userDocuments = documentStore.documents.filter(
-        doc => doc.creator === account.address
-      );
-      setDocuments(userDocuments);
+        const response = await aptosClient().view<[Document]>({
+            payload: {
+                function: `${moduleAddress}::${moduleName}::get_all_documents`,
+                typeArguments: [],
+                functionArguments: [],
+            }
+          });
+          if (Array.isArray(response) && response.length > 0) {
+            console.log("All documents:", response[0]);
+            const userDocuments = response[0].filter(
+              doc => doc.creator === account.address
+            );
+            console.log("User documents:", userDocuments);
+            setDocuments(userDocuments);
+          } else {
+            console.log("No documents found or unexpected response format");
+            setDocuments([]);
+          }
     } catch (error) {
       console.error("Error fetching documents:", error);
+    }
+  };
+
+  const fetchPendingDocuments = async () => {
+    if (!account) return;
+    try {
+      const response = await aptosClient().view<Document[]>({
+        payload: {
+          function: `${moduleAddress}::${moduleName}::get_all_documents`,
+          typeArguments: [],
+          functionArguments: [],
+        }
+      });
+
+      if (Array.isArray(response) && response.length > 0) {
+        console.log("All documents:", response[0]);
+        const pendingDocs = response[0].filter(doc => 
+          doc.signers.includes(account.address) && 
+          !doc.signatures.some(sig => sig.signer === account.address) &&
+          !doc.is_completed
+        );
+        console.log("Pending documents:", pendingDocs);
+        setPendingDocuments(pendingDocs);
+      } else {
+        console.log("No pending documents found or unexpected response format");
+        setPendingDocuments([]);
+      }
+    } catch (error) {
+      console.error("Error fetching pending documents:", error);
+      message.error("Failed to fetch pending documents. Please try again.");
     }
   };
 
@@ -133,7 +146,7 @@ const HashSignDApp: React.FC = () => {
       const signerAddresses = signers.split(',').map(addr => addr.trim());
       const payload: InputTransactionData = {
         data: {
-          function: `${moduleAddress}::hash_sign1::create_document`,
+          function: `${moduleAddress}::${moduleName}::create_document`,
           functionArguments: [cid, signerAddresses],
         }
       };
@@ -149,23 +162,13 @@ const HashSignDApp: React.FC = () => {
     }
   };
 
-  const handleSignDocument = async (documentId: number) => {
-    if (!account) return;
-    setTransactionInProgress(true);
-    try {
-      const payload: InputTransactionData = {
-        data: {
-          function: `${moduleAddress}::hash_sign1::sign_document`,
-          functionArguments: [documentId],
-        }
-      };
-      await signAndSubmitTransaction(payload);
-      fetchDocuments();
-    } catch (error) {
-      console.error("Error signing document:", error);
-    } finally {
-      setTransactionInProgress(false);
-    }
+  const handleShare = (docId: number) => {
+    const signingLink = `${window.location.origin}/sign/${docId}`;
+    navigator.clipboard.writeText(signingLink).then(() => {
+      message.success('Signing link copied to clipboard!');
+    }, (err) => {
+      console.error('Could not copy text: ', err);
+    });
   };
 
   const handleViewDocument = async (cid: string) => {
@@ -180,71 +183,56 @@ const HashSignDApp: React.FC = () => {
       message.error("Failed to fetch the document. Please try again.");
     }
   };
-  const renderDocumentPreview = (doc: Document) => {
-    const fileExtension = doc.content_hash.split('.').pop()?.toLowerCase();
-    if (fileExtension === 'pdf') {
-      return <FileTextOutlined style={{ fontSize: '48px', color: '#e74c3c' }} />;
-    } else if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension || '')) {
-      return <img src={`https://gateway.pinata.cloud/ipfs/${doc.content_hash}`} alt="Preview" style={{ width: '100px', height: '100px', objectFit: 'cover' }} />;
-    } else {
-      return <FileTextOutlined style={{ fontSize: '48px', color: '#3498db' }} />;
-    }
-  };
-
-  if (!isRegistered) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold mb-4">Welcome to HashSign</h2>
-          <p className="mb-4">To get started, please register your account.</p>
-          <Button
-            onClick={register}
-            disabled={transactionInProgress}
-            type="primary"
-            size="large"
-          >
-            Register
+  const renderDocumentCard = (doc: Document, isPending: boolean) => (
+    <div key={doc.id} className="bg-white shadow-md rounded-lg p-6">
+      <p className="mb-2">Status: {doc.is_completed ? 'Completed' : 'Pending'}</p>
+      <p className="mb-4">Signatures: {doc.signatures.length}/{doc.signers.length}</p>
+      <div className="flex space-x-2">
+        <Button onClick={() => handleViewDocument(doc.content_hash)} type="primary" block>
+          View Document
+        </Button>
+        {isPending ? (
+          <Button type="primary" onClick={() => navigate(`/sign/${doc.id}`)} block>
+            Sign Document
           </Button>
-        </div>
+        ) : (
+          <Button onClick={() => handleShare(doc.id)} icon={<ShareAltOutlined />} block>
+            Share
+          </Button>
+        )}
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold">HashSign Dashboard</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-        <Button
-          onClick={() => setIsModalVisible(true)}
-          type="primary"
-          icon={<PlusOutlined />}
-          size="large"
-        >
-          Create Document
-        </Button>
-        <WalletSelector />
-        </div>
-
-      </div>
-
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold mb-4">Your Documents</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {documents.map((doc) => (
-            <div key={doc.id} className="bg-white shadow-md rounded-lg p-6">
-              <div className="flex justify-center mb-4">
-                {renderDocumentPreview(doc)}
-              </div>
-              <p className="mb-2">Status: {doc.is_completed ? 'Completed' : 'Pending'}</p>
-              <p className="mb-4">Signatures: {doc.signatures.length}/{doc.signers.length}</p>
-              <Button onClick={() => handleViewDocument(doc.content_hash)} type="primary" block>
-                View Document
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex justify-between items-center mb-8">
+            <h1 className="text-3xl font-bold">HashSign Dashboard</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <Button
+                onClick={() => setIsModalVisible(true)}
+                type="primary"
+                icon={<PlusOutlined />}
+                size="large"
+              >
+                Create Document
               </Button>
+              <WalletSelector />
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
+    
+          <Tabs defaultActiveKey="1">
+            <TabPane tab="Your Documents" key="1">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {documents.map(doc => renderDocumentCard(doc, false))}
+              </div>
+            </TabPane>
+            <TabPane tab="Pending Signatures" key="2">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {pendingDocuments.map(doc => renderDocumentCard(doc, true))}
+              </div>
+            </TabPane>
+          </Tabs>
 
       <Modal
         title="Create New Document"
@@ -293,4 +281,4 @@ const HashSignDApp: React.FC = () => {
   );
 };
 
-export default HashSignDApp;
+export default ContractManagement;
